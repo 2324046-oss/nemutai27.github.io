@@ -1,0 +1,271 @@
+# nemutai27.github.io
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Voxel Builder</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #ui {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px 20px;
+            border-radius: 10px;
+            color: white;
+            display: flex;
+            gap: 20px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .slot {
+            width: 50px;
+            height: 50px;
+            border: 2px solid #555;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #222;
+        }
+        .slot.active {
+            border-color: #fff;
+            box-shadow: 0 0 10px #fff;
+        }
+        #instructions {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="crosshair"></div>
+    
+    <div id="instructions">
+        <h2 class="font-bold border-bottom mb-2">操作方法</h2>
+        <p>クリック: ゲーム開始 / 視点ロック</p>
+        <p>W, A, S, D: 移動</p>
+        <p>SPACE: ジャンプ</p>
+        <p>左クリック: ブロック破壊</p>
+        <p>右クリック: ブロック設置</p>
+        <p>1, 2, 3: ブロック切り替え</p>
+        <p>ESC: 視点解除</p>
+    </div>
+
+    <div id="ui">
+        <div id="slot-1" class="slot active">1: 草</div>
+        <div id="slot-2" class="slot">2: 土</div>
+        <div id="slot-3" class="slot">3: 煉瓦</div>
+    </div>
+
+    <script>
+        let camera, scene, renderer, controls;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, canJump = false;
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let objects = [];
+        let raycaster;
+        let currentBlockType = 1; // 1: Grass, 2: Dirt, 3: Brick
+
+        const colorMap = {
+            1: 0x567d46, // Grass
+            2: 0x8b4513, // Dirt
+            3: 0xb22222  // Brick
+        };
+
+        window.onload = function() {
+            init();
+            animate();
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb); // Sky blue
+            scene.fog = new THREE.Fog(0x87ceeb, 0, 50);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = 2;
+
+            const light = new THREE.HemisphereLight(0xeeeeee, 0x888888, 1);
+            light.position.set(0.5, 1, 0.75);
+            scene.add(light);
+
+            // Simple block generation (Floor)
+            const gridSize = 20;
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            
+            for (let x = -gridSize; x < gridSize; x++) {
+                for (let z = -gridSize; z < gridSize; z++) {
+                    const material = new THREE.MeshLambertMaterial({ color: 0x567d46 });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.position.set(x, 0, z);
+                    scene.add(mesh);
+                    objects.push(mesh);
+                }
+            }
+
+            raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 10);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Pointer Lock Controls
+            document.addEventListener('click', () => {
+                document.body.requestPointerLock();
+            });
+
+            const onKeyDown = (event) => {
+                switch (event.code) {
+                    case 'KeyW': moveForward = true; break;
+                    case 'KeyA': moveLeft = true; break;
+                    case 'KeyS': moveBackward = true; break;
+                    case 'KeyD': moveRight = true; break;
+                    case 'Space': if (canJump === true) velocity.y += 5; canJump = false; break;
+                    case 'Digit1': updateActiveSlot(1); break;
+                    case 'Digit2': updateActiveSlot(2); break;
+                    case 'Digit3': updateActiveSlot(3); break;
+                }
+            };
+
+            const onKeyUp = (event) => {
+                switch (event.code) {
+                    case 'KeyW': moveForward = false; break;
+                    case 'KeyA': moveLeft = false; break;
+                    case 'KeyS': moveBackward = false; break;
+                    case 'KeyD': moveRight = false; break;
+                }
+            };
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mousemove', onMouseMove);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function updateActiveSlot(type) {
+            currentBlockType = type;
+            document.querySelectorAll('.slot').forEach(s => s.classList.remove('active'));
+            document.getElementById(`slot-${type}`).classList.add('active');
+        }
+
+        function onMouseDown(event) {
+            if (document.pointerLockElement !== document.body) return;
+
+            const raycasterCenter = new THREE.Raycaster();
+            raycasterCenter.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const intersects = raycasterCenter.intersectObjects(objects);
+
+            if (intersects.length > 0) {
+                const intersect = intersects[0];
+
+                if (event.button === 0) { // Left click: Destroy
+                    if (intersect.object.position.y !== 0) { // Don't destroy the base floor
+                        scene.remove(intersect.object);
+                        objects.splice(objects.indexOf(intersect.object), 1);
+                    }
+                } else if (event.button === 2) { // Right click: Build
+                    const pos = intersect.object.position.clone().add(intersect.face.normal);
+                    
+                    const geometry = new THREE.BoxGeometry(1, 1, 1);
+                    const material = new THREE.MeshLambertMaterial({ color: colorMap[currentBlockType] });
+                    const newBlock = new THREE.Mesh(geometry, material);
+                    newBlock.position.copy(pos);
+                    scene.add(newBlock);
+                    objects.push(newBlock);
+                }
+            }
+        }
+
+        // Prevent context menu on right click
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        let pitch = 0;
+        let yaw = 0;
+        function onMouseMove(event) {
+            if (document.pointerLockElement === document.body) {
+                yaw -= event.movementX * 0.002;
+                pitch -= event.movementY * 0.002;
+                pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+                
+                camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (document.pointerLockElement === document.body) {
+                const time = performance.now();
+                const delta = 0.015;
+
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                velocity.y -= 9.8 * 1.5 * delta; // Gravity
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize();
+
+                const camDir = new THREE.Vector3();
+                camera.getWorldDirection(camDir);
+                camDir.y = 0;
+                camDir.normalize();
+                
+                const camSide = new THREE.Vector3().crossVectors(camera.up, camDir).normalize();
+
+                if (moveForward || moveBackward) {
+                    velocity.addScaledVector(camDir, direction.z * 40.0 * delta);
+                }
+                if (moveLeft || moveRight) {
+                    velocity.addScaledVector(camSide, direction.x * 40.0 * delta);
+                }
+
+                camera.position.addScaledVector(velocity, delta);
+
+                // Simple ground collision
+                if (camera.position.y < 2) {
+                    velocity.y = 0;
+                    camera.position.y = 2;
+                    canJump = true;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
